@@ -101,7 +101,7 @@ export function registerRecallTool(pi: ExtensionAPI, store: MemoryStore): void {
           .sort((a, b) => b[1] - a[1])
           .map(([cat, count]) => `  ${cat}: ${count}`)
           .join("\n");
-        text = `Total: ${info.total} memories\nBy category:\n${cats}`;
+        text = `Total: ${info.total} memories (${info.archived} archived)\nBy category:\n${cats}`;
       }
 
       return {
@@ -127,7 +127,7 @@ export function registerRecallTool(pi: ExtensionAPI, store: MemoryStore): void {
         `   Vector: ${vecStatus}`,
         `   Embedder: ${store.embedder.kind === "http" ? "http" : "local-hash"} (dim ${store.embedder.dim})`,
         `   Vec coverage: ${cov.embedded}/${cov.total}`,
-        `   Total memories: ${info.total}`,
+        `   Total memories: ${info.total} (+${info.archived} archived)`,
         `   By category:`,
         ...Object.entries(info.byCategory)
           .sort((a, b) => b[1] - a[1])

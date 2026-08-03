@@ -64,7 +64,7 @@ export function registerInjection(pi: ExtensionAPI, store: MemoryStore): void {
     }
 
     // 2. High-importance memories (≤ 2K char)
-    const topMemories = store.recall("", {
+    const topMemories = await store.recall("", {
       limit: maxFacts,
       mode: "fts",
     });

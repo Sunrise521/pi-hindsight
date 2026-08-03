@@ -46,6 +46,7 @@ export function registerScratchpadTool(pi: ExtensionAPI, store: MemoryStore): vo
           if (!label) {
             return {
               content: [{ type: "text" as const, text: "Error: `label` is required for action=add." }],
+              details: null,
               isError: true,
             };
           }
@@ -60,22 +61,24 @@ export function registerScratchpadTool(pi: ExtensionAPI, store: MemoryStore): vo
         case "done": {
           const id = params.id as number | undefined;
           if (!id) {
-            return { content: [{ type: "text" as const, text: "Error: `id` is required for action=done." }], isError: true };
+            return { content: [{ type: "text" as const, text: "Error: `id` is required for action=done." }], details: null, isError: true };
           }
           const ok = store.scratchpadDone(id);
           return {
             content: [{ type: "text" as const, text: ok ? `✅ Scratchpad item #${id} marked done.` : `⚠️ Item #${id} not found or already done.` }],
+            details: { id },
           };
         }
 
         case "undo": {
           const id = params.id as number | undefined;
           if (!id) {
-            return { content: [{ type: "text" as const, text: "Error: `id` is required for action=undo." }], isError: true };
+            return { content: [{ type: "text" as const, text: "Error: `id` is required for action=undo." }], details: null, isError: true };
           }
           const ok = store.scratchpadUndo(id);
           return {
             content: [{ type: "text" as const, text: ok ? `↩️ Scratchpad item #${id} cancelled.` : `⚠️ Item #${id} not found or already done.` }],
+            details: { id },
           };
         }
 
@@ -83,7 +86,7 @@ export function registerScratchpadTool(pi: ExtensionAPI, store: MemoryStore): vo
           const status = params.status as "open" | "done" | "cancelled" | undefined;
           const items = store.scratchpadList(status);
           if (items.length === 0) {
-            return { content: [{ type: "text" as const, text: "📋 Scratchpad is empty." }] };
+            return { content: [{ type: "text" as const, text: "📋 Scratchpad is empty." }], details: { count: 0 } };
           }
           const lines = items.map((item, i) => {
             const statusIcon = item.status === "open" ? "⬜" : item.status === "done" ? "✅" : "❌";
@@ -98,15 +101,16 @@ export function registerScratchpadTool(pi: ExtensionAPI, store: MemoryStore): vo
         case "clear": {
           const s = (params.status as string) ?? "done";
           if (s !== "done" && s !== "cancelled") {
-            return { content: [{ type: "text" as const, text: "Error: `status` must be 'done' or 'cancelled' for clear." }], isError: true };
+            return { content: [{ type: "text" as const, text: "Error: `status` must be 'done' or 'cancelled' for clear." }], details: null, isError: true };
           }
           const count = store.scratchpadClear(s);
-          return { content: [{ type: "text" as const, text: `🗑️ Cleared ${count} ${s} scratchpad items.` }] };
+          return { content: [{ type: "text" as const, text: `🗑️ Cleared ${count} ${s} scratchpad items.` }], details: { count } };
         }
 
         default:
           return {
             content: [{ type: "text" as const, text: `Error: unknown action "${action}". Use: add, list, done, undo, clear.` }],
+            details: null,
             isError: true,
           };
       }

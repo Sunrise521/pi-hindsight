@@ -772,18 +772,23 @@ export class MemoryStore {
   }
 
   /** Count memories for the current project */
-  count(): { total: number; byCategory: Record<string, number> } {
+  /** Count memories for the current project (excludes archived). */
+  count(): { total: number; byCategory: Record<string, number>; archived: number } {
     const total = (this.db.prepare(
-      "SELECT COUNT(*) AS c FROM memories WHERE project_key = ?",
+      "SELECT COUNT(*) AS c FROM memories WHERE project_key = ? AND status != 'archived'",
     ).get(this.projectKey) as { c: number }).c;
 
     const rows = this.db.prepare(
-      "SELECT category, COUNT(*) AS c FROM memories WHERE project_key = ? GROUP BY category",
+      "SELECT category, COUNT(*) AS c FROM memories WHERE project_key = ? AND status != 'archived' GROUP BY category",
     ).all(this.projectKey) as Array<{ category: string; c: number }>;
+
+    const archived = (this.db.prepare(
+      "SELECT COUNT(*) AS c FROM memories WHERE project_key = ? AND status = 'archived'",
+    ).get(this.projectKey) as { c: number }).c;
 
     const byCategory: Record<string, number> = {};
     for (const r of rows) byCategory[r.category] = r.c;
-    return { total, byCategory };
+    return { total, byCategory, archived };
   }
 
   /** Return session memories for tier-2 distillation. */

@@ -54,7 +54,7 @@ export function registerExportTool(pi: ExtensionAPI, store: MemoryStore): void {
         if (catCount === 0) continue;
 
         // Fetch top items for this category
-        const result = store.recall("", {
+        const result = await store.recall("", {
           category: cat,
           limit,
           mode: "fts",

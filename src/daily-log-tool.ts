@@ -34,7 +34,11 @@ export function registerDailyLogTool(pi: ExtensionAPI, store: MemoryStore): void
     execute: async (toolCallId, params, signal, onUpdate, ctx) => {
       const content = params.content as string;
       if (!content.trim()) {
-        return { content: [{ type: "text" as const, text: "Error: `content` is required." }], isError: true };
+        return {
+          content: [{ type: "text" as const, text: "Error: `content` is required." }],
+          details: null,
+          isError: true,
+        };
       }
 
       const row = store.dailyLogAppend(today(), content, "manual");
