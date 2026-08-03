@@ -15,11 +15,13 @@ import { homedir } from "node:os";
 import { MemoryStore, deriveProjectKey } from "./memory-store.js";
 import { registerCapture } from "./capture.js";
 import { registerRecallTool } from "./recall-tool.js";
-import { registerScratchpadTool } from "./scratchpad-tool.js";
-import { registerDailyLogTool, registerDailyLogAutoAppend } from "./daily-log-tool.js";
-import { registerExportTool } from "./export-tool.js";
+import { registerScratchpad } from "./scratchpad.js";
 import { registerHandoff } from "./handoff.js";
-import { registerInjection } from "./injection.js";
+import { registerWriteTool } from "./write-tool.js";
+// P2 — 待实现:
+// import { registerDailyLogTool, registerDailyLogAutoAppend } from "./daily-log-tool.js";
+// import { registerExportTool } from "./export-tool.js";
+// import { registerInjection } from "./injection.js";
 
 export default async function (pi: ExtensionAPI) {
   // Resolve db path
@@ -39,25 +41,25 @@ export default async function (pi: ExtensionAPI) {
 
   // Register tools
   registerRecallTool(pi, store);
-  registerScratchpadTool(pi, store);
-  registerDailyLogTool(pi, store);
-  registerExportTool(pi, store);
+  registerWriteTool(pi, store);
+  registerScratchpad(pi, store);
+  // P2: registerDailyLogTool(pi, store);
+  // P2: registerExportTool(pi, store);
 
   // Register tier-1 capture
   registerCapture(pi, store);
 
-  // Register session shutdown to run decay + auto-append daily log
+  // Register session shutdown to run decay
   pi.on("session_shutdown", async () => {
     const archived = store.runDecay();
     if (archived > 0) {
       console.debug(`[pi-hindsight] decay archived ${archived} memories`);
     }
   });
-  registerDailyLogAutoAppend(pi, store);
+  // P2: registerDailyLogAutoAppend(pi, store);
 
   // Register session handoff on compact
   registerHandoff(pi, store);
 
-  // Register ambient injection (only if PI_MEM_AMBIENT=1)
-  registerInjection(pi, store);
+  // P2: registerInjection(pi, store); — 需 PI_MEM_AMBIENT=1 + before_agent_start handler + KV-cache snapshot
 }

@@ -191,17 +191,13 @@ export class MemoryStore {
     this.db.exec(`
       CREATE TRIGGER IF NOT EXISTS memories_ad
       AFTER DELETE ON memories BEGIN
-        INSERT INTO memories_fts(memories_fts, rowid)
-        VALUES ('delete', old.id);
+        DELETE FROM memories_fts WHERE rowid = old.id;
       END;
     `);
     this.db.exec(`
       CREATE TRIGGER IF NOT EXISTS memories_au
       AFTER UPDATE ON memories BEGIN
-        INSERT INTO memories_fts(memories_fts, rowid)
-        VALUES ('delete', old.id);
-        INSERT INTO memories_fts(rowid, summary, detail, tags)
-        VALUES (new.id, new.summary, new.detail, new.tags);
+        UPDATE memories_fts SET summary = new.summary, detail = new.detail, tags = new.tags WHERE rowid = new.id;
       END;
     `);
 
@@ -362,6 +358,8 @@ export class MemoryStore {
         JOIN memories m ON m.id = memories_fts.rowid
         WHERE memories_fts MATCH ?
           AND m.project_key = ?
+
+          AND m.status != 'archived'
           ${opts.category ? "AND m.category = ?" : ""}
         ORDER BY bm25
         LIMIT ${limit * 2}
@@ -385,6 +383,8 @@ export class MemoryStore {
           FROM memories_vec v
           JOIN memories m ON m.id = v.rowid
           WHERE m.project_key = ?
+
+          AND m.status != 'archived'
           ${opts.category ? "AND m.category = ?" : ""}
           ORDER BY v.distance
           LIMIT ${limit * 2}
@@ -602,112 +602,13 @@ export class MemoryStore {
     return result.changes;
   }
 
-  // ——————————————————————————
-  // Maintenance
-  // ——————————————————————————
-
-  close(): void {
-    this.db.close();
+  /** Archive a single memory by ID (soft delete). Returns true if archived. */
+  archiveMemory(id: number): boolean {
+    const now_ = now();
+    const result = this.db.prepare(
+      "UPDATE memories SET status = 'archived', updated_at = ? WHERE id = ? AND project_key = ? AND status != 'archived'",
+    ).run(now_, id, this.projectKey);
+    return result.changes > 0;
   }
 
-  /** Count memories for the current project */
-  count(): { total: number; byCategory: Record<string, number> } {
-    const total = (this.db.prepare(
-      "SELECT COUNT(*) AS c FROM memories WHERE project_key = ?",
-    ).get(this.projectKey) as { c: number }).c;
-
-    const rows = this.db.prepare(
-      "SELECT category, COUNT(*) AS c FROM memories WHERE project_key = ? GROUP BY category",
-    ).all(this.projectKey) as Array<{ category: string; c: number }>;
-
-    const byCategory: Record<string, number> = {};
-    for (const r of rows) byCategory[r.category] = r.c;
-    return { total, byCategory };
-  }
-
-  /** Return session memories for tier-2 distillation. */
-  getSessionMemories(sessionId: string, limit = 50): MemoryRow[] {
-    const rows = this.db.prepare(`
-      SELECT * FROM memories
-      WHERE project_key = ? AND session_id = ?
-      ORDER BY created_at DESC
-      LIMIT ?
-    `).all(this.projectKey, sessionId, limit) as Record<string, unknown>[];
-    return rows.map(r => this.rowToMemory(r));
-  }
-
-  /** Return unarchived memories for tier-2 batch processing. */
-  getPendingMemories(limit = 100): MemoryRow[] {
-    const rows = this.db.prepare(`
-      SELECT * FROM memories
-      WHERE project_key = ? AND status IN ('pending','curated')
-      ORDER BY importance DESC, created_at ASC
-      LIMIT ?
-    `).all(this.projectKey, limit) as Record<string, unknown>[];
-    return rows.map(r => this.rowToMemory(r));
-  }
-
-  // ——————————————————————————
-  // Internal mappers
-  // ——————————————————————————
-
-  private rowToScratchpad(row: Record<string, unknown>): ScratchpadRow {
-    return {
-      id: row.id as number,
-      projectKey: row.project_key as string,
-      sessionId: row.session_id as string | null,
-      label: row.label as string,
-      priority: row.priority as number,
-      status: row.status as "open" | "done" | "cancelled",
-      createdAt: row.created_at as number,
-      doneAt: row.done_at as number | null,
-      updatedAt: row.updated_at as number,
-    };
-  }
-
-  private rowToDailyLog(row: Record<string, unknown>): DailyLogRow {
-    return {
-      id: row.id as number,
-      projectKey: row.project_key as string,
-      date: row.date as string,
-      content: row.content as string,
-      entryType: row.entry_type as string,
-      createdAt: row.created_at as number,
-    };
-  }
-
-  private rowToMemory(row: Record<string, unknown>): MemoryRow {
-    return {
-      id: row.id as number,
-      projectKey: row.project_key as string,
-      sessionId: row.session_id as string | null,
-      turnIndex: row.turn_index as number | null,
-      category: row.category as string,
-      summary: row.summary as string,
-      detail: row.detail as string | null,
-      tags: row.tags as string | null,
-      contentHash: row.content_hash as string,
-      importance: row.importance as number,
-      confidence: row.confidence as number,
-      accessCnt: row.access_cnt as number,
-      status: row.status as string,
-      createdAt: row.created_at as number,
-      updatedAt: row.updated_at as number,
-      accessedAt: row.accessed_at as number | null,
-    };
-  }
-
-  private rowToRecallHit(row: MemoryRow): RecallHit {
-    return {
-      id: row.id,
-      summary: row.summary,
-      detail: row.detail,
-      tags: row.tags,
-      category: row.category,
-      importance: row.importance,
-      confidence: row.confidence,
-      createdAt: row.createdAt,
-      score: 0,
-    };
-  }
-}
+  /** Restore an archived memory by ID. Returns true if restored. */

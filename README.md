@@ -47,6 +47,8 @@ Once loaded, the following tools are available to the model:
 | `recall_memory` | Search memories with `query`, `category`, `mode` (fts/vector/hybrid) |
 | `mem_count` | Count memories by category |
 | `scratch` | Manage scratchpad: `add`, `list`, `done`, `undo`, `clear` |
+| `memory_write` | Explicitly write a memory (summary, category, detail, importance, tags) |
+| `memory_forget` | Archive (soft-delete) a memory by ID or keyword query |
 | `mem_daily` | Append to today's daily log |
 | `mem_export` | Export full Markdown memory report |
 
