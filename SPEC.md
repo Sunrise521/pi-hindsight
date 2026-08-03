@@ -230,6 +230,13 @@ final_rank = recall_score * 0.7
 recency_norm = exp(-0.01 * days_since_created)
 ```
 
+### 5.4 嵌入器（v0.3.0）
+
+- 默认 `LocalHashEmbedder`：字符 n-gram（3-4）特征哈希 → 1536 维、L2 归一，零依赖/离线/确定性（~2k vec/s）
+- 可插拔 `HttpEmbedder`：OpenAI 兼容 `/v1/embeddings`，`PI_MEM_EMBED_BASE_URL` 激活；失败自动回退本地哈希
+- 写入路径：首次插入写向量（upsert 跳过，content_hash 保证 id 稳定）；capture 批量一次嵌入；启动时自动回填存量
+- 实现要点：vec0 rowid 需 `BigInt` 绑定（better-sqlite3 数值绑定为 REAL 会报 `Only integers are allowed`）；vec0 0.1.9 不支持 UPSERT/REPLACE
+
 ---
 
 ## 6. 可选注入模式（PI_MEM_AMBIENT）
@@ -323,6 +330,10 @@ recency_norm = exp(-0.01 * days_since_created)
 | `PI_MEM_VEC_DIM` | int | `1536` | 向量维度（需与 embedding 模型匹配） |
 | `PI_MEM_AMBIENT_MAX_CHARS` | int | `5000` | 注入最大字符数 |
 | `PI_MEM_AMBIENT_MAX_FACTS` | int | `5` | 注入高重要性记忆条数 |
+| `PI_MEM_EMBED` | `local`/`http` | `local` | 嵌入器模式（`http` 需配 BASE_URL） |
+| `PI_MEM_EMBED_BASE_URL` | url | — | HTTP 嵌入端点（如 new-api 网关 `http://127.0.0.1:4000/v1`） |
+| `PI_MEM_EMBED_API_KEY` | str | — | 端点 bearer token（可选） |
+| `PI_MEM_EMBED_MODEL` | str | `text-embedding-3-small` | 嵌入模型名（维度须 1536） |
 
 ---
 
@@ -338,7 +349,7 @@ recency_norm = exp(-0.01 * days_since_created)
 | 6 | `session_before_compact` handoff | ✅ 完成 | P1 |
 | 7 | 注入模式 `PI_MEM_AMBIENT` + `before_agent_start` | ✅ 完成 | P2 |
 | 8 | `mem_export` 工具（Markdown 视图） | ✅ 完成 | P2 |
-| 9 | tier-2 蒸馏（pi-exec headless） | ⬜ 待实现 | P2 |
+| 9 | tier-2 蒸馏（pi-exec headless） | ⬜ 待实现（嵌入/vec0 已由 v0.3.0 落地：本地哈希 + 可插拔 HTTP） | P2 |
 | — | `tags` 列加入 memories 表 + FTS5 索引 | ✅ 补充 | P0 |
 | — | `config` 表 + configGet/configSet | ✅ 补充 | P1 |
 

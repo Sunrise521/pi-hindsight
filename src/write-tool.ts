@@ -75,7 +75,8 @@ export function registerWriteTool(pi: ExtensionAPI, store: MemoryStore): void {
         tags,
       };
 
-      const row = store.store(draft);
+      const vec = await store.embedDraft(draft);
+      const row = store.store(draft, { vector: vec });
 
       return {
         content: [{
@@ -143,7 +144,7 @@ export function registerWriteTool(pi: ExtensionAPI, store: MemoryStore): void {
       }
 
       // Query mode: search by FTS, archive top-N
-      const result = store.recall(query!, {
+      const result = await store.recall(query!, {
         mode: "fts",
         limit,
       });

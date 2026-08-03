@@ -135,7 +135,7 @@ export function registerCapture(pi: ExtensionAPI, store: MemoryStore, options?: 
     if (drafts.length === 0) return;
 
     // Store in a batch transaction
-    const count = store.storeBatch(drafts);
+    const count = await store.storeBatch(drafts);
     if (count > 0) {
       console.debug(`[pi-hindsight] tier-1 captured ${count} memories`);
     }

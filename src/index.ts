@@ -35,8 +35,15 @@ export default async function (pi: ExtensionAPI) {
   // Initialize store
   const store = new MemoryStore(dbPath, projectKey);
 
+  // Backfill vectors for existing memories (non-blocking; local embedder is instant)
+  store.backfillVectors()
+    .then((n) => {
+      if (n > 0) console.log(`[pi-hindsight] backfilled ${n} vectors (embedder=${store.embedder.kind})`);
+    })
+    .catch((e) => console.warn(`[pi-hindsight] vector backfill failed: ${(e as Error).message}`));
+
   console.log(
-    `[pi-hindsight] loaded (project=${projectKey.slice(0, 16)}…, db=${dbPath}, vec=${store.vecAvailable})`,
+    `[pi-hindsight] loaded (project=${projectKey.slice(0, 16)}…, db=${dbPath}, vec=${store.vecAvailable}, embed=${store.embedder.kind})`,
   );
 
   // Register tools

@@ -41,7 +41,7 @@ export function registerRecallTool(pi: ExtensionAPI, store: MemoryStore): void {
       const limit = Math.min((params.limit as number) ?? 10, 30);
       const mode = (params.mode as string) ?? "fts";
 
-      const result = store.recall(query, {
+      const result = await store.recall(query, {
         category,
         limit,
         mode: mode as "fts" | "vector" | "hybrid",
@@ -118,12 +118,15 @@ export function registerRecallTool(pi: ExtensionAPI, store: MemoryStore): void {
     description: "Show Hindsight extension status",
     handler: async (args, ctx) => {
       const info = store.count();
+      const cov = store.vectorCoverage();
       const vecStatus = store.vecAvailable ? "✅ sqlite-vec loaded" : "❌ sqlite-vec not available";
       const lines = [
         `📊 Hindsight Memory Status`,
         `   Project: ${store.projectKey.slice(0, 16)}…`,
         `   Database: ${store.dbPath}`,
         `   Vector: ${vecStatus}`,
+        `   Embedder: ${store.embedder.kind === "http" ? "http" : "local-hash"} (dim ${store.embedder.dim})`,
+        `   Vec coverage: ${cov.embedded}/${cov.total}`,
         `   Total memories: ${info.total}`,
         `   By category:`,
         ...Object.entries(info.byCategory)

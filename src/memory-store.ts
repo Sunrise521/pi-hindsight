@@ -9,10 +9,11 @@ import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { createEmbedder, VECTOR_DIM, type Embedder } from "./embed.js";
 import { homedir, hostname } from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 
-export const VECTOR_DIM = 1536; // default embedding dimension
+export { VECTOR_DIM } from "./embed.js";
 
 export interface DraftMemory {
   summary: string;
@@ -115,6 +116,30 @@ function now(): number {
   return Date.now();
 }
 
+/** Text fed to the embedder for a memory draft. */
+function embedText(m: { summary: string; detail?: string; tags?: string }): string {
+  const parts = [m.summary, m.tags ?? ""];
+  if (m.detail) parts.push(m.detail);
+  return parts.filter(Boolean).join(" ").slice(0, 2000);
+}
+
+/**
+ * Sanitize a user FTS5 query: quote every bare token as a phrase so tokens
+ * can never be parsed as column references or operators (e.g. a query word
+ * like "memory" colliding with table columns). Preserves explicit
+ * AND/OR/NOT, parentheses and already-quoted phrases.
+ */
+export function sanitizeFtsQuery(query: string): string {
+  const tokens = query.match(/"[^"]*"|\(|\)|AND|OR|NOT|\S+/gi) ?? [];
+  return tokens
+    .map((t) => {
+      if (/^".*"$/.test(t) || t === "(" || t === ")") return t;
+      if (/^(AND|OR|NOT)$/i.test(t)) return t.toUpperCase();
+      return `"${t.replace(/"/g, "")}"`;
+    })
+    .join(" ");
+}
+
 // ————————————————————————————————————————————————
 // Store class
 // ————————————————————————————————————————————————
@@ -124,11 +149,13 @@ export class MemoryStore {
   public readonly projectKey: string;
   public readonly dbPath: string;
   public vecAvailable = false;
+  public readonly embedder: Embedder;
 
-  constructor(dbPath: string, projectKey: string) {
+  constructor(dbPath: string, projectKey: string, embedder?: Embedder) {
     mkdirSync(dirname(dbPath), { recursive: true });
     this.dbPath = dbPath;
     this.projectKey = projectKey;
+    this.embedder = embedder ?? createEmbedder();
     this.db = new Database(dbPath);
 
     // Load sqlite-vec (optional — degrade gracefully)
@@ -269,7 +296,7 @@ export class MemoryStore {
   // ——————————————————————————
 
   /** Store a memory with content_hash dedup (upsert). */
-  store(m: DraftMemory): MemoryRow {
+  store(m: DraftMemory, opts?: { vector?: number[] }): MemoryRow {
     const now_ = now();
     const hash = sha256(m.summary + (m.detail ?? ""));
 
@@ -285,7 +312,7 @@ export class MemoryStore {
         accessed_at = excluded.updated_at;
     `);
 
-    const rowId = stmt.run(
+    const info = stmt.run(
       this.projectKey,
       m.sessionId ?? null,
       m.turnIndex ?? null,
@@ -298,22 +325,41 @@ export class MemoryStore {
       m.importance ? 0.7 : 0.4,
       now_,
       now_,
-    ).lastInsertRowid;
+    );
+    const rowId = Number(info.lastInsertRowid);
 
-    return this.getById(Number(rowId))!;
+    // Vector write — only on first insert (content_hash dedup keeps the id
+    // stable across upserts, so an existing id already has its vector).
+    if (info.changes === 1 && this.vecAvailable) {
+      const vec =
+        opts?.vector ??
+        (this.embedder.embedSync ? this.embedder.embedSync([embedText(m)])[0] : undefined);
+      if (vec) {
+        try {
+          this.db
+            .prepare("INSERT INTO memories_vec(rowid, embedding) VALUES (?, ?)")
+            .run(BigInt(rowId), JSON.stringify(vec));
+        } catch (e) {
+          console.warn(`[pi-hindsight] vec insert failed: ${(e as Error).message}`);
+        }
+      }
+    }
+
+    return this.getById(rowId)!;
   }
 
-  /** Batch store multiple memories (transactional). */
-  storeBatch(mems: DraftMemory[]): number {
-    const insert = this.db.transaction((items: DraftMemory[]) => {
-      let count = 0;
-      for (const m of items) {
-        this.store(m);
-        count++;
-      }
-      return count;
+  /** Batch store multiple memories (transactional). Embeds before the sync tx. */
+  async storeBatch(mems: DraftMemory[]): Promise<number> {
+    if (mems.length === 0) return 0;
+    const texts = mems.map(embedText);
+    const vectors = this.embedder.embedSync
+      ? this.embedder.embedSync(texts)
+      : await this.embedder.embed(texts);
+    const insert = this.db.transaction((items: Array<{ m: DraftMemory; vec: number[] }>) => {
+      for (const it of items) this.store(it.m, { vector: it.vec });
+      return items.length;
     });
-    return insert(mems);
+    return insert(mems.map((m, i) => ({ m, vec: vectors[i] })));
   }
 
   // ——————————————————————————
@@ -334,7 +380,7 @@ export class MemoryStore {
    * Hybrid recall: FTS5 keyword search + optional vector ANN.
    * Returns RRF-fused top-K results.
    */
-  recall(
+  async recall(
     query: string,
     opts: {
       category?: string;
@@ -342,12 +388,14 @@ export class MemoryStore {
       limit?: number;
       mode?: "fts" | "vector" | "hybrid";
     } = {},
-  ): RecallResult {
+  ): Promise<RecallResult> {
     const limit = opts.limit ?? 10;
     const mode = opts.mode ?? "fts";
     const pk = opts.projectKey ?? this.projectKey;
 
     if (!query.trim()) return { hits: [], total: 0, mode };
+
+    const safeQuery = sanitizeFtsQuery(query);
 
     // FTS5 score (normalized BM25)
     let ftsHits: Array<{ id: number; score: number }> = [];
@@ -364,7 +412,7 @@ export class MemoryStore {
         ORDER BY bm25
         LIMIT ${limit * 2}
       `;
-      const params: unknown[] = [query, pk];
+      const params: unknown[] = [safeQuery, pk];
       if (opts.category) params.push(opts.category);
       ftsHits = (this.db.prepare(sql).all(...params) as Array<{ id: number; bm25: number }>).map(r => ({
         id: r.id,
@@ -372,31 +420,32 @@ export class MemoryStore {
       }));
     }
 
-    // Vector score (cosine distance normalized)
+    // Vector score — real kNN: embed the query, then MATCH + k against vec0
     let vecHits: Array<{ id: number; score: number }> = [];
     if (mode !== "fts" && this.vecAvailable) {
-      // Vector recall requires an embedding — we store embeddings for qualifying memories
-      // during tier-2. For now, return empty; tier-2 pipeline populates vec table.
       try {
+        const qvec = this.embedder.embedSync
+          ? this.embedder.embedSync([query])[0]
+          : (await this.embedder.embed([query]))[0];
+        const k = Math.max(limit * 4, 40);
         const sql = `
           SELECT v.rowid AS id, v.distance AS d
           FROM memories_vec v
           JOIN memories m ON m.id = v.rowid
-          WHERE m.project_key = ?
-
-          AND m.status != 'archived'
-          ${opts.category ? "AND m.category = ?" : ""}
-          ORDER BY v.distance
-          LIMIT ${limit * 2}
+          WHERE v.embedding MATCH ? AND v.k = ?
+            AND m.project_key = ?
+            AND m.status != 'archived'
+            ${opts.category ? "AND m.category = ?" : ""}
         `;
-        const params: unknown[] = [pk];
+        const params: unknown[] = [JSON.stringify(qvec), k, pk];
         if (opts.category) params.push(opts.category);
         vecHits = (this.db.prepare(sql).all(...params) as Array<{ id: number; d: number }>).map(r => ({
           id: r.id,
           score: 1 / (1 + r.d),
         }));
       } catch {
-        // vec table may be empty; ignore
+        // vec table empty or embedding failed; degrade gracefully
+        vecHits = [];
       }
     }
 
@@ -628,6 +677,8 @@ export class MemoryStore {
     const limit = opts.limit ?? 10;
     if (!query.trim()) return { hits: [], total: 0, mode: "fts" };
 
+    const safeQuery = sanitizeFtsQuery(query);
+
     const sql = `
       SELECT m.id AS id, bm25(memories_fts, 0.0, 1.0) AS bm25
       FROM memories_fts
@@ -638,7 +689,7 @@ export class MemoryStore {
       ORDER BY bm25
       LIMIT ${limit}
     `;
-    const hits = (this.db.prepare(sql).all(query, this.projectKey) as Array<{ id: number; bm25: number }>).map(r => ({
+    const hits = (this.db.prepare(sql).all(safeQuery, this.projectKey) as Array<{ id: number; bm25: number }>).map(r => ({
       id: r.id,
       score: 1 / (1 + r.bm25),
     }));
@@ -650,6 +701,60 @@ export class MemoryStore {
     }).filter(Boolean) as RecallHit[];
 
     return { hits: resultHits, total: hits.length, mode: "fts" };
+  }
+
+  /**
+   * Compute the embedding vector for a draft (used by async callers when the
+   * embedder has no sync path, e.g. HTTP provider).
+   */
+  async embedDraft(m: DraftMemory): Promise<number[]> {
+    const text = embedText(m);
+    return this.embedder.embedSync
+      ? this.embedder.embedSync([text])[0]
+      : (await this.embedder.embed([text]))[0];
+  }
+
+  /** Backfill vectors for memories missing a vec row (idempotent). */
+  async backfillVectors(batchSize = 50): Promise<number> {
+    if (!this.vecAvailable) return 0;
+    let total = 0;
+    for (;;) {
+      const rows = this.db.prepare(`
+        SELECT m.id, m.summary, m.detail, m.tags
+        FROM memories m
+        LEFT JOIN memories_vec v ON v.rowid = m.id
+        WHERE m.project_key = ? AND v.rowid IS NULL
+        LIMIT ?
+      `).all(this.projectKey, batchSize) as Array<{ id: number; summary: string; detail: string | null; tags: string | null }>;
+      if (rows.length === 0) break;
+      const texts = rows.map((r) =>
+        embedText({ summary: r.summary, detail: r.detail ?? undefined, tags: r.tags ?? undefined }),
+      );
+      const vectors = this.embedder.embedSync
+        ? this.embedder.embedSync(texts)
+        : await this.embedder.embed(texts);
+      const ins = this.db.prepare("INSERT INTO memories_vec(rowid, embedding) VALUES (?, ?)");
+      const tx = this.db.transaction((items: Array<{ id: number; vec: number[] }>) => {
+        for (const it of items) ins.run(BigInt(it.id), JSON.stringify(it.vec));
+      });
+      tx(rows.map((r, i) => ({ id: r.id, vec: vectors[i] })));
+      total += rows.length;
+    }
+    return total;
+  }
+
+  /** Vector coverage for the current project. */
+  vectorCoverage(): { total: number; embedded: number } {
+    const total = (this.db.prepare(
+      "SELECT COUNT(*) AS c FROM memories WHERE project_key = ?",
+    ).get(this.projectKey) as { c: number }).c;
+    const embedded = (this.db.prepare(`
+      SELECT COUNT(*) AS c
+      FROM memories m
+      JOIN memories_vec v ON v.rowid = m.id
+      WHERE m.project_key = ?
+    `).get(this.projectKey) as { c: number }).c;
+    return { total, embedded };
   }
 
   // ——————————————————————————

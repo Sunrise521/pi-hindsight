@@ -6,7 +6,7 @@
 
 | Feature | Description |
 |---------|-------------|
-| **Memory Recall** | Hybrid FTS5 keyword + sqlite-vec vector ANN search with RRF fusion |
+| **Memory Recall** | Hybrid FTS5 keyword + sqlite-vec vector ANN search with RRF fusion (v0.3: real kNN — local hash embedder by default, optional HTTP neural embedder) |
 | **Tier-1 Capture** | Zero-LLM-cost heuristic extraction from assistant messages on `message_end` |
 | **Scratchpad** | Todo list with `add`/`list`/`done`/`undo`/`clear` — model-managed |
 | **Daily Logs** | Auto-append on session shutdown + manual `mem_daily` tool + `/mem-daily` command |
@@ -68,6 +68,17 @@ And slash commands:
 | `PI_MEM_DIR` | `~/.pi/agent/memory` | Database directory |
 | `PI_MEM_AMBIENT_MAX_CHARS` | `5000` | Max chars for injected context |
 | `PI_MEM_AMBIENT_MAX_FACTS` | `5` | Max high-importance facts to inject |
+| `PI_MEM_EMBED` | `local` | Embedder mode: `local` (zero-dep hash) or `http` (OpenAI-compatible) |
+| `PI_MEM_EMBED_BASE_URL` | — | HTTP embedder endpoint, e.g. `http://127.0.0.1:4000/v1` (new-api gateway) |
+| `PI_MEM_EMBED_API_KEY` | — | Optional bearer token for the embed endpoint |
+| `PI_MEM_EMBED_MODEL` | `text-embedding-3-small` | Embedding model name |
+
+### Vector Embeddings (v0.3.0)
+
+- **Default `local` embedder**: deterministic char n-gram (3-4) feature hashing → 1536-dim, L2-normalized. Zero dependencies, offline, instant (~2k vec/s). Quality is lexical-overlap similarity, not neural — fine for short memory summaries.
+- **Optional `http` embedder**: any OpenAI-compatible `/v1/embeddings` endpoint (set `PI_MEM_EMBED_BASE_URL`, optionally `_API_KEY`/`_MODEL`). Dimension must be 1536; on any failure it falls back to the local embedder so vector recall never breaks.
+- **Write path**: every new memory gets a vector on first insert (upserts skip — content hash keeps ids stable); capture batches embed in one call; on load, missing vectors are backfilled automatically (idempotent).
+- **`recall_memory` modes**: `fts` (keyword), `vector` (kNN on the query embedding), `hybrid` (RRF fusion, 0.6 FTS + 0.4 vector). Archived memories are excluded from all modes.
 
 ## Architecture
 
