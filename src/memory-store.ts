@@ -612,3 +612,150 @@ export class MemoryStore {
   }
 
   /** Restore an archived memory by ID. Returns true if restored. */
+  restoreMemory(id: number): boolean {
+    const now_ = now();
+    const result = this.db.prepare(
+      "UPDATE memories SET status = 'pending', updated_at = ? WHERE id = ? AND project_key = ? AND status = 'archived'",
+    ).run(now_, id, this.projectKey);
+    return result.changes > 0;
+  }
+
+  /** Recall ONLY archived memories via FTS5 (for restore candidate search). */
+  recallArchived(
+    query: string,
+    opts: { limit?: number } = {},
+  ): RecallResult {
+    const limit = opts.limit ?? 10;
+    if (!query.trim()) return { hits: [], total: 0, mode: "fts" };
+
+    const sql = `
+      SELECT m.id AS id, bm25(memories_fts, 0.0, 1.0) AS bm25
+      FROM memories_fts
+      JOIN memories m ON m.id = memories_fts.rowid
+      WHERE memories_fts MATCH ?
+        AND m.project_key = ?
+        AND m.status = 'archived'
+      ORDER BY bm25
+      LIMIT ${limit}
+    `;
+    const hits = (this.db.prepare(sql).all(query, this.projectKey) as Array<{ id: number; bm25: number }>).map(r => ({
+      id: r.id,
+      score: 1 / (1 + r.bm25),
+    }));
+
+    const top = hits.slice(0, limit);
+    const resultHits = top.map(t => {
+      const row = this.getById(t.id);
+      return row ? { ...this.rowToRecallHit(row), score: t.score } : null;
+    }).filter(Boolean) as RecallHit[];
+
+    return { hits: resultHits, total: hits.length, mode: "fts" };
+  }
+
+  // ——————————————————————————
+  // Maintenance
+  close(): void {
+    this.db.close();
+  }
+
+  /** Count memories for the current project */
+  count(): { total: number; byCategory: Record<string, number> } {
+    const total = (this.db.prepare(
+      "SELECT COUNT(*) AS c FROM memories WHERE project_key = ?",
+    ).get(this.projectKey) as { c: number }).c;
+
+    const rows = this.db.prepare(
+      "SELECT category, COUNT(*) AS c FROM memories WHERE project_key = ? GROUP BY category",
+    ).all(this.projectKey) as Array<{ category: string; c: number }>;
+
+    const byCategory: Record<string, number> = {};
+    for (const r of rows) byCategory[r.category] = r.c;
+    return { total, byCategory };
+  }
+
+  /** Return session memories for tier-2 distillation. */
+  getSessionMemories(sessionId: string, limit = 50): MemoryRow[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM memories
+      WHERE project_key = ? AND session_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(this.projectKey, sessionId, limit) as Record<string, unknown>[];
+    return rows.map(r => this.rowToMemory(r));
+  }
+
+  /** Return unarchived memories for tier-2 batch processing. */
+  getPendingMemories(limit = 100): MemoryRow[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM memories
+      WHERE project_key = ? AND status IN ('pending','curated')
+      ORDER BY importance DESC, created_at ASC
+      LIMIT ?
+    `).all(this.projectKey, limit) as Record<string, unknown>[];
+    return rows.map(r => this.rowToMemory(r));
+  }
+
+  // ——————————————————————————
+  // Internal mappers
+  // ——————————————————————————
+
+  private rowToScratchpad(row: Record<string, unknown>): ScratchpadRow {
+    return {
+      id: row.id as number,
+      projectKey: row.project_key as string,
+      sessionId: row.session_id as string | null,
+      label: row.label as string,
+      priority: row.priority as number,
+      status: row.status as "open" | "done" | "cancelled",
+      createdAt: row.created_at as number,
+      doneAt: row.done_at as number | null,
+      updatedAt: row.updated_at as number,
+    };
+  }
+
+  private rowToDailyLog(row: Record<string, unknown>): DailyLogRow {
+    return {
+      id: row.id as number,
+      projectKey: row.project_key as string,
+      date: row.date as string,
+      content: row.content as string,
+      entryType: row.entry_type as string,
+      createdAt: row.created_at as number,
+    };
+  }
+
+  private rowToMemory(row: Record<string, unknown>): MemoryRow {
+    return {
+      id: row.id as number,
+      projectKey: row.project_key as string,
+      sessionId: row.session_id as string | null,
+      turnIndex: row.turn_index as number | null,
+      category: row.category as string,
+      summary: row.summary as string,
+      detail: row.detail as string | null,
+      tags: row.tags as string | null,
+      contentHash: row.content_hash as string,
+      importance: row.importance as number,
+      confidence: row.confidence as number,
+      accessCnt: row.access_cnt as number,
+      status: row.status as string,
+      createdAt: row.created_at as number,
+      updatedAt: row.updated_at as number,
+      accessedAt: row.accessed_at as number | null,
+    };
+  }
+
+  private rowToRecallHit(row: MemoryRow): RecallHit {
+    return {
+      id: row.id,
+      summary: row.summary,
+      detail: row.detail,
+      tags: row.tags,
+      category: row.category,
+      importance: row.importance,
+      confidence: row.confidence,
+      createdAt: row.createdAt,
+      score: 0,
+    };
+  }
+}

@@ -186,3 +186,63 @@ export function registerWriteTool(pi: ExtensionAPI, store: MemoryStore): void {
   });
 
   // ——————————————————————
+  // memory_restore
+  // ——————————————————————
+  pi.registerTool({
+    name: "memory_restore",
+    label: "Restore Memory",
+    description:
+      "Restore archived (soft-deleted) memories by ID or by keyword query. " +
+      "Reverse of memory_forget. " +
+      "Example: `memory_restore({id: 42})` or `memory_restore({query: \"important config\", limit: 3})`.",
+    parameters: Type.Object({
+      id: Type.Optional(Type.Number({ description: "要恢复的记忆 ID（精确匹配）" })),
+      query: Type.Optional(Type.String({ description: "关键词搜索匹配后恢复 top-N（与 id 二选一）" })),
+      limit: Type.Optional(Type.Number({ description: "query 模式最多恢复条数（默认 5，最大 50）" })),
+    }),
+    execute: async (toolCallId, params, signal, onUpdate, ctx) => {
+      const id = params.id as number | undefined;
+      const query = params.query as string | undefined;
+      const limit = Math.min((params.limit as number) ?? 5, 50);
+
+      if (!id && !query) {
+        return {
+          content: [{ type: "text" as const, text: "Error: provide either `id` (exact) or `query` (keyword search) to restore." }],
+          details: {},
+          isError: true,
+        };
+      }
+
+      const restoredIds: number[] = [];
+
+      if (id !== undefined) {
+        const ok = store.restoreMemory(id);
+        if (ok) restoredIds.push(id);
+        return {
+          content: [{ type: "text" as const, text: ok ? `✅ Memory #${id} restored.` : `Memory #${id} not found or not archived.` }],
+          details: { ok, restored: ok ? [id] : [], count: ok ? 1 : 0 },
+        };
+      }
+
+      // Query mode: search archived by FTS, restore top-N
+      const result = store.recallArchived(query!, { limit });
+
+      for (const hit of result.hits) {
+        const ok = store.restoreMemory(hit.id);
+        if (ok) restoredIds.push(hit.id);
+      }
+
+      if (restoredIds.length === 0) {
+        return {
+          content: [{ type: "text" as const, text: "No matching archived memories found to restore." }],
+          details: { ok: false, restored: [], count: 0, totalMatching: result.total },
+        };
+      }
+
+      return {
+        content: [{ type: "text" as const, text: `✅ Restored ${restoredIds.length} memories (query: "${query}"). IDs: ${restoredIds.join(", ")}` }],
+        details: { ok: true, restored: restoredIds, count: restoredIds.length, totalMatching: result.total },
+      };
+    },
+  });
+}

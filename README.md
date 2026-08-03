@@ -49,6 +49,7 @@ Once loaded, the following tools are available to the model:
 | `scratch` | Manage scratchpad: `add`, `list`, `done`, `undo`, `clear` |
 | `memory_write` | Explicitly write a memory (summary, category, detail, importance, tags) |
 | `memory_forget` | Archive (soft-delete) a memory by ID or keyword query |
+| `memory_restore` | Restore archived (soft-deleted) memories by ID or keyword query |
 | `mem_daily` | Append to today's daily log |
 | `mem_export` | Export full Markdown memory report |
 

@@ -62,3 +62,43 @@ async function main() {
   // Check count
   const count = store.count();
   console.log(`[smoke] Total memories: ${count.total}`);
+
+  // 6. Restore archived memory
+  const restoreOk = store.restoreMemory(row.id);
+  console.log(`[smoke] 🔄 restoreMemory result: ${restoreOk}`);
+  if (!restoreOk) throw new Error("FAIL: restoreMemory returned false");
+  console.log(`[smoke] ✅ Restored memory #${row.id}`);
+
+  // 7. Recall after restore — must find it again
+  const r3 = store.recall("smoke test memory", { mode: "fts" });
+  console.log(`[smoke] Recall after restore: ${r3.hits.length} hits`);
+  if (!r3.hits.some((h) => h.id === row.id))
+    throw new Error("FAIL: not found after restore — restore or filter broken");
+  console.log(`[smoke] ✅ Memory restored and recallable`);
+
+  // 8. recallArchived — should NOT return the restored memory
+  let r4 = store.recallArchived("smoke test memory", { limit: 10 });
+  console.log(`[smoke] recallArchived after restore: ${r4.hits.length} hits`);
+  if (r4.hits.some((h) => h.id === row.id))
+    throw new Error("FAIL: restored memory still appears in recallArchived");
+  console.log(`[smoke] ✅ recallArchived correctly excludes restored memories`);
+
+  // 9. recallArchived for a still-archived memory
+  store.archiveMemory(row.id);
+  r4 = store.recallArchived("smoke test memory", { limit: 10 });
+  console.log(`[smoke] recallArchived after re-archive: ${r4.hits.length} hits`);
+  if (!r4.hits.some((h) => h.id === row.id))
+    throw new Error("FAIL: recallArchived should find archived memory");
+  console.log(`[smoke] ✅ recallArchived finds archived memories`);
+
+  // Restore again for clean state
+  store.restoreMemory(row.id);
+  store.close();
+  rmSync(tmpDir, { recursive: true, force: true });
+  console.log(`\n[smoke] 🎉 ALL CHECKS PASSED`);
+}
+
+main().catch((e) => {
+  console.error(`\n[smoke] ❌ FAILED: ${e.message}`);
+  process.exit(1);
+});
