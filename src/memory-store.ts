@@ -207,6 +207,14 @@ export class MemoryStore {
       USING fts5(summary, detail, tags, tokenize='unicode61');
     `);
 
+    // FTS5 sync triggers — DROP first so pre-v0.2.0 databases (legacy
+    // "INSERT INTO memories_fts(memories_fts, rowid) VALUES('delete', …)" syntax,
+    // broken on SQLite >= 3.53) get their triggers migrated on load.
+    this.db.exec(`
+      DROP TRIGGER IF EXISTS memories_ai;
+      DROP TRIGGER IF EXISTS memories_ad;
+      DROP TRIGGER IF EXISTS memories_au;
+    `);
     // FTS5 sync triggers
     this.db.exec(`
       CREATE TRIGGER IF NOT EXISTS memories_ai
