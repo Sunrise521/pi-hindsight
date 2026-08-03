@@ -233,7 +233,7 @@ recency_norm = exp(-0.01 * days_since_created)
 ### 5.4 嵌入器（v0.3.0）
 
 - 默认 `LocalHashEmbedder`：字符 n-gram（3-4）特征哈希 → 1536 维、L2 归一，零依赖/离线/确定性（~2k vec/s）
-- 可插拔 `HttpEmbedder`：OpenAI 兼容 `/v1/embeddings`，`PI_MEM_EMBED_BASE_URL` 激活；失败自动回退本地哈希
+- 可插拔 `HttpEmbedder`：OpenAI 兼容 `/v1/embeddings`，`PI_MEM_EMBED_BASE_URL` 激活；失败自动回退本地哈希。**零 key 配置**：`PI_MEM_EMBED=http` 时自动复用 `~/.pi/agent/auth.json` 的 openai 凭据（默认端点 `https://api.openai.com/v1` + `text-embedding-3-small`）
 - 写入路径：首次插入写向量（upsert 跳过，content_hash 保证 id 稳定）；capture 批量一次嵌入；启动时自动回填存量
 - 实现要点：vec0 rowid 需 `BigInt` 绑定（better-sqlite3 数值绑定为 REAL 会报 `Only integers are allowed`）；vec0 0.1.9 不支持 UPSERT/REPLACE
 

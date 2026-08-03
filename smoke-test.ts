@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { MemoryStore } from "./src/memory-store.js";
+import { HttpEmbedder, openaiKeyFromPiAuth } from "./src/embed.js";
 
 async function main() {
   const tmpDir = mkdtempSync(join(tmpdir(), "pi-hindsight-smoke-"));
@@ -148,6 +149,43 @@ async function main() {
     throw new Error("FAIL: archived memory found by vector");
   console.log(`[smoke] ✅ Archived memory excluded from vector recall`);
   store.restoreMemory(pm.id);
+
+  // 15. HttpEmbedder success path (stubbed fetch, dim validated)
+  const httpEmbedder = new HttpEmbedder("http://stub.test/v1", "sk-test", "text-embedding-3-small");
+  const stubVec = new Array(1536).fill(0.1);
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    ok: true,
+    json: async () => ({ data: [{ embedding: stubVec }] }),
+  })) as typeof fetch;
+  const hv1 = await httpEmbedder.embed(["hello"]);
+  if (hv1[0].length !== 1536 || hv1[0][0] !== 0.1)
+    throw new Error("FAIL: http embedder success path");
+  console.log(`[smoke] ✅ HttpEmbedder success path (dim 1536)`);
+
+  // 16. HttpEmbedder dim mismatch → fallback to local hash
+  globalThis.fetch = (async () => ({
+    ok: true,
+    json: async () => ({ data: [{ embedding: new Array(8).fill(0.1) }] }),
+  })) as typeof fetch;
+  const hv2 = await httpEmbedder.embed(["hello"]);
+  globalThis.fetch = origFetch;
+  if (hv2[0].length !== 1536) throw new Error("FAIL: dim mismatch fallback");
+  console.log(`[smoke] ✅ HttpEmbedder dim-mismatch fallback (local ${hv2[0].length}d)`);
+
+  // 17. HttpEmbedder network failure → fallback to local hash
+  globalThis.fetch = (async () => {
+    throw new Error("boom");
+  }) as typeof fetch;
+  const hv3 = await httpEmbedder.embed(["hello"]);
+  globalThis.fetch = origFetch;
+  if (hv3[0].length !== 1536) throw new Error("FAIL: network failure fallback");
+  console.log(`[smoke] ✅ HttpEmbedder network-failure fallback`);
+
+  // 18. Pi auth key reuse — resolve non-empty OpenAI key from ~/.pi/agent/auth.json
+  const piKey = openaiKeyFromPiAuth();
+  if (piKey !== undefined && piKey.length === 0) throw new Error("FAIL: auth key empty");
+  console.log(`[smoke] ✅ Pi auth key reuse: ${piKey ? "resolved" : "not present (skipped)"}`);
 
   // Restore again for clean state
   store.restoreMemory(row.id);

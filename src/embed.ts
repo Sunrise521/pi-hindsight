@@ -16,6 +16,10 @@
  *   PI_MEM_EMBED=local      — force local even if BASE_URL is set
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 export const VECTOR_DIM = 1536; // fixed dimension — matches existing vec0 tables
 
 export interface Embedder {
@@ -153,13 +157,38 @@ export class HttpEmbedder implements Embedder {
 // Factory
 // ————————————————————————————————————————————————
 
+/**
+ * Reuse the OpenAI credential pi already keeps in ~/.pi/agent/auth.json so
+ * users never have to copy keys into env. Never logged, never persisted.
+ */
+export function openaiKeyFromPiAuth(): string | undefined {
+  try {
+    const p = join(homedir(), ".pi", "agent", "auth.json");
+    if (!existsSync(p)) return undefined;
+    const auth = JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>;
+    const o = auth.openai;
+    if (typeof o === "string" && o.length > 0) return o;
+    if (o && typeof o === "object") {
+      const k = (o as { key?: unknown }).key;
+      if (typeof k === "string" && k.length > 0) return k;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function createEmbedder(): Embedder {
   const mode = (process.env.PI_MEM_EMBED ?? "").toLowerCase();
   const base = process.env.PI_MEM_EMBED_BASE_URL;
   if (mode === "http" || (mode !== "local" && base)) {
+    const apiKey = process.env.PI_MEM_EMBED_API_KEY ?? openaiKeyFromPiAuth();
+    console.log(
+      `[pi-hindsight] embedder=http (base=${base ?? "https://api.openai.com/v1"}, key=${process.env.PI_MEM_EMBED_API_KEY ? "env" : apiKey ? "pi-auth" : "none"}, model=${process.env.PI_MEM_EMBED_MODEL ?? "text-embedding-3-small"})`,
+    );
     return new HttpEmbedder(
-      base!,
-      process.env.PI_MEM_EMBED_API_KEY,
+      base ?? "https://api.openai.com/v1",
+      apiKey,
       process.env.PI_MEM_EMBED_MODEL ?? "text-embedding-3-small",
     );
   }
